@@ -2490,6 +2490,57 @@ def test_auto_join_accepts_trusted_gateway_actor_context_without_task_proof(monk
     asyncio.run(scenario())
 
 
+
+def test_auto_join_uses_admitted_source_and_correct_receiving_bot(monkeypatch):
+    async def scenario():
+        adapter, _ = _auto_join_host(monkeypatch)
+        runner = sys.modules["gateway.run"]._gateway_runner_ref()
+        runner._delivery_adapter_for = lambda source: adapter
+        source = types.SimpleNamespace(
+            platform=types.SimpleNamespace(value="discord"),
+            scope_id="7", user_id="42", profile="migi-discord",
+            profile_route_rejected=False,
+        )
+
+        def start(*, guild_id, host_execution_attachment):
+            with talk_discord._SESSION_LOCK:
+                talk_discord._SESSION.update({
+                    "guild_id": guild_id,
+                    "generation": 1,
+                    "task": asyncio.create_task(asyncio.sleep(60)),
+                })
+            return "Starting scoped voice"
+
+        monkeypatch.setattr(talk_discord, "start_session", start)
+        receipt = await talk_discord.start_or_join_session(source=source)
+        assert receipt == "Starting scoped voice"
+        adapter.join_voice_channel.assert_awaited_once()
+        with talk_discord._SESSION_LOCK:
+            task = talk_discord._SESSION["task"]
+            talk_discord._SESSION.clear()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_auto_join_rejects_another_profile_receiving_bot(monkeypatch):
+    async def scenario():
+        adapter, _ = _auto_join_host(monkeypatch)
+        runner = sys.modules["gateway.run"]._gateway_runner_ref()
+        runner._delivery_adapter_for = lambda source: object()
+        source = types.SimpleNamespace(
+            platform=types.SimpleNamespace(value="discord"),
+            scope_id="7", user_id="42", profile="migi-discord",
+            profile_route_rejected=False,
+        )
+        receipt = await talk_discord.start_or_join_session(source=source)
+        assert "does not match" in receipt
+        adapter.join_voice_channel.assert_not_awaited()
+
+    asyncio.run(scenario())
+
+
 def test_auto_join_reuses_existing_connection_without_claiming_it(monkeypatch):
     async def scenario():
         adapter, invocation = _auto_join_host(monkeypatch)
