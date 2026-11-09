@@ -268,11 +268,20 @@ def _talk_command(raw_args: str = "", invocation=None) -> str:
         return talk_discord.start_core_session(factory)
     if sub in {"", "join"}:
         capture = getattr(invocation, "capture_realtime_execution_attachment", None)
+        attachment = None
         if callable(capture):
             try:
                 attachment = capture()
             except Exception as exc:  # noqa: BLE001 - capability refusal is speakable
                 return f"Provider-owned voice was refused by the host ({type(exc).__name__})."
+        # Preserve upstream's legacy invocation path on older hosts. On a
+        # compatible host, a trusted Discord proof enables cold auto-join.
+        proof_capture = getattr(invocation, "capture_discord_task_context_proof", None)
+        if callable(proof_capture):
+            return talk_discord.start_or_join_session(
+                invocation=invocation, host_execution_attachment=attachment
+            )
+        if attachment is not None:
             return talk_discord.start_session(host_execution_attachment=attachment)
         return talk_discord.start_session()
     return talk_discord.JOIN_USAGE
