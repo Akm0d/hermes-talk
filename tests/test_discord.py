@@ -2454,6 +2454,42 @@ def test_auto_join_cold_room_preserves_profile_and_avoids_transcript_binding(mon
     asyncio.run(scenario())
 
 
+def test_auto_join_accepts_trusted_gateway_actor_context_without_task_proof(monkeypatch):
+    async def scenario():
+        adapter, _ = _auto_join_host(monkeypatch)
+        values = {
+            "HERMES_SESSION_PLATFORM": "discord",
+            "HERMES_SESSION_SCOPE_ID": "7",
+            "HERMES_SESSION_ACTOR_ID": "42",
+            "HERMES_SESSION_PROFILE": "migi-discord",
+        }
+        module = types.ModuleType("gateway.session_context")
+        module.get_session_env = lambda key: values.get(key)
+        monkeypatch.setitem(sys.modules, "gateway.session_context", module)
+        assert talk_discord.trusted_discord_caller_available()
+
+        def start(*, guild_id, host_execution_attachment):
+            with talk_discord._SESSION_LOCK:
+                talk_discord._SESSION.update({
+                    "guild_id": guild_id,
+                    "generation": 1,
+                    "task": asyncio.create_task(asyncio.sleep(60)),
+                })
+            return "Starting scoped Talk"
+
+        monkeypatch.setattr(talk_discord, "start_session", start)
+        reply = await talk_discord.start_or_join_session(invocation=object())
+        assert reply == "Starting scoped Talk"
+        adapter.join_voice_channel.assert_awaited_once()
+        with talk_discord._SESSION_LOCK:
+            task = talk_discord._SESSION["task"]
+            talk_discord._SESSION.clear()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
 def test_auto_join_reuses_existing_connection_without_claiming_it(monkeypatch):
     async def scenario():
         adapter, invocation = _auto_join_host(monkeypatch)
