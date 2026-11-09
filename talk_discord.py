@@ -1913,7 +1913,7 @@ async def start_or_join_session(*, invocation=None, host_execution_attachment=No
         if guild_id <= 0 or user_id <= 0:
             raise ValueError("incomplete Discord identity")
         profile_name = _resolve_current_profile()
-        if profile_name and asserted_profile != profile_name:
+        if not profile_name or asserted_profile != profile_name:
             raise ValueError("profile mismatch")
     except Exception:  # noqa: BLE001 — gateway/Discord boundary
         return "Cannot verify the Discord caller's voice channel; run /voice join first."
@@ -1942,16 +1942,25 @@ async def start_or_join_session(*, invocation=None, host_execution_attachment=No
             if "not in a voice channel" not in str(exc):
                 return str(exc)
         else:
-            caller_channel = await adapter.get_user_voice_channel(guild_id, str(user_id))
-            if caller_channel is None or (
-                getattr(bridge["voice_client"], "channel", None) is not None
-                and getattr(bridge["voice_client"].channel, "id", None)
-                != getattr(caller_channel, "id", None)
+            try:
+                caller_channel = await adapter.get_user_voice_channel(guild_id, str(user_id))
+            except Exception:  # noqa: BLE001 — gateway/Discord boundary
+                return "Cannot verify your current Discord voice channel."
+            connected_channel = getattr(bridge["voice_client"], "channel", None)
+            if (
+                caller_channel is None
+                or connected_channel is None
+                or getattr(connected_channel, "id", None) != getattr(caller_channel, "id", None)
             ):
                 return "Migi is connected to another voice channel; use /voice leave first."
             return start_session(
                 guild_id=guild_id, host_execution_attachment=host_execution_attachment
             )
+
+        with _SESSION_LOCK:
+            active = _SESSION.get("task")
+            if active is not None and not active.done():
+                return "I'm already live in a voice channel — say `talk leave` first."
 
         joined_client = None
         try:
