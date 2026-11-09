@@ -10,13 +10,13 @@ all run unchanged.
 Only the room changes: instead of a microphone and a speaker, the frames
 come from and go to a Discord voice channel.
 
-**We do not open a Discord connection.** The host already has one: its
+**Normally we borrow the Discord connection.** The host already has one: its
 Discord adapter joins a channel, receives RTP, decrypts DAVE, and decodes
 Opus to 48 kHz stereo PCM in this same process. We borrow that — one live
 connection, one bot, the host's own E2EE handling. The cost is that the
 host exposes no plugin hook for voice, so we reach the adapter through the
 runner reference the host's own tools use (``gateway.run._gateway_runner_ref``).
-That coupling is deliberate and contained to :func:`resolve_voice_bridge`;
+That coupling is deliberate and contained to the voice-bridge helpers;
 every attribute it touches is checked, and a host that renames any of them
 degrades to a spoken refusal instead of an exception.
 
@@ -52,6 +52,7 @@ except ImportError:  # pragma: no cover - flat-module fallback (Hermes file-path
     import talk_pause
 
 _log = logging.getLogger(__name__)
+_AUTO_JOIN_LOCKS: dict[int, Any] = {}  # gateway-loop locks, keyed by guild
 
 #: Discord's wire geometry. 20 ms of 48 kHz stereo s16le.
 DISCORD_SAMPLE_RATE = 48_000
@@ -1867,6 +1868,111 @@ def start_core_session(factory: object, guild_id: int | None = None) -> str:
     )
 
 
+
+async def start_or_join_session(*, invocation=None, host_execution_attachment=None) -> str:
+    """Preserve upstream's connected path; auto-join only with trusted Discord proof."""
+    try:
+        resolve_voice_bridge()
+    except TalkDiscordError as exc:
+        if "run the join command first" not in str(exc):
+            return str(exc)
+    else:
+        return start_session(host_execution_attachment=host_execution_attachment)
+
+    capture = getattr(invocation, "capture_discord_task_context_proof", None)
+    if not callable(capture):
+        return "Cannot verify the Discord caller's voice channel; run /voice join first."
+    try:
+        proof = capture()
+        guild_id, user_id = proof["guild_id"], proof["operator_user_id"]
+        if not all(
+            type(v) is int or (isinstance(v, str) and v.isdecimal())
+            for v in (guild_id, user_id)
+        ):
+            raise ValueError("invalid Discord identifiers")
+        guild_id, user_id = int(guild_id), int(user_id)
+        if guild_id <= 0 or user_id <= 0 or not proof.get("proof"):
+            raise ValueError("incomplete Discord proof")
+        profile_name = _resolve_current_profile()
+        if profile_name and proof.get("profile") != profile_name:
+            raise ValueError("profile mismatch")
+    except Exception:
+        return "Cannot verify the Discord caller's voice channel; run /voice join first."
+
+    try:
+        from gateway.run import _gateway_runner_ref
+        runner = _gateway_runner_ref() if callable(_gateway_runner_ref) else None
+        if runner is None:
+            raise TalkDiscordError("the Hermes gateway isn't running")
+        adapter = _resolve_discord_adapter_for_profile(runner, _resolve_current_profile())
+        if adapter is None:
+            raise TalkDiscordError("this profile has no Discord adapter")
+    except TalkDiscordError as exc:
+        return str(exc)
+    except Exception:
+        return "Cannot resolve this profile's Discord voice adapter."
+
+    import asyncio
+    lock = _AUTO_JOIN_LOCKS.setdefault(guild_id, asyncio.Lock())
+    async with lock:
+        # A concurrent caller may have joined while this call awaited the lock.
+        try:
+            resolve_voice_bridge(guild_id)
+        except TalkDiscordError as exc:
+            if "not in a voice channel" not in str(exc):
+                return str(exc)
+        else:
+            return start_session(
+                guild_id=guild_id, host_execution_attachment=host_execution_attachment
+            )
+
+        try:
+            channel = await adapter.get_user_voice_channel(guild_id, str(user_id))
+            if channel is None or getattr(getattr(channel, "guild", None), "id", None) != guild_id:
+                return "Join a Discord voice channel first, then use /talk join."
+            # No text-channel binding: do not route speech through legacy agent/TTS.
+            if not await adapter.join_voice_channel(channel):
+                return "Discord refused the voice-channel connection."
+            bridge = resolve_voice_bridge(guild_id)
+        except Exception as exc:
+            _log.warning("Talk auto-join failed (%s)", _safe_exception_name(exc))
+            return "Could not connect to that Discord voice channel."
+
+        result = start_session(
+            guild_id=guild_id, host_execution_attachment=host_execution_attachment
+        )
+        with _SESSION_LOCK:
+            task = _SESSION.get("task")
+            if task is not None and not task.done() and _SESSION.get("guild_id") == guild_id:
+                _SESSION["talk_owned_voice"] = (adapter, guild_id, bridge["voice_client"])
+                return result
+
+        if getattr(adapter, "_voice_clients", {}).get(guild_id) is bridge["voice_client"]:
+            try:
+                await adapter.leave_voice_channel(guild_id)
+            except Exception:
+                _log.warning("Could not undo failed Talk auto-join", exc_info=True)
+        return result
+
+
+async def _release_talk_owned_voice(ownership: tuple, generation: int) -> None:
+    """Release only the same connection; never disconnect a newer session."""
+    adapter, guild_id, original_client = ownership
+    import asyncio
+    async with _AUTO_JOIN_LOCKS.setdefault(guild_id, asyncio.Lock()):
+        with _SESSION_LOCK:
+            active = _SESSION.get("task")
+            if active is not None and not active.done():
+                return
+        clients = getattr(adapter, "_voice_clients", None)
+        if not isinstance(clients, dict) or clients.get(guild_id) is not original_client:
+            return
+        try:
+            await adapter.leave_voice_channel(guild_id)
+        except Exception:
+            _log.warning("Could not disconnect Talk-owned Discord voice", exc_info=True)
+
+
 def start_session(
     guild_id: int | None = None, *, host_execution_attachment=None,
     native_task=None, native_task_api=None,
@@ -1957,6 +2063,7 @@ def start_session(
             owns_session = (
                 _SESSION.get("task") is finished and _SESSION.get("generation") == generation
             )
+            ownership = _SESSION.get("talk_owned_voice") if owns_session else None
             if owns_session:
                 _SESSION.clear()
                 if failure:
@@ -1969,6 +2076,11 @@ def start_session(
             except Exception as exc:  # noqa: BLE001 — teardown is best-effort
                 _log.debug("discord audio teardown failed (%s)", _safe_exception_name(exc))
             return
+
+        if ownership is not None:
+            cleanup = loop.create_task(_release_talk_owned_voice(ownership, generation))
+            _NOTIFICATION_TASKS.add(cleanup)
+            cleanup.add_done_callback(_NOTIFICATION_TASKS.discard)
 
         if failure:
             _log.warning(
