@@ -1915,7 +1915,7 @@ async def start_or_join_session(*, invocation=None, host_execution_attachment=No
         profile_name = _resolve_current_profile()
         if profile_name and asserted_profile != profile_name:
             raise ValueError("profile mismatch")
-    except Exception:
+    except Exception:  # noqa: BLE001 — gateway/Discord boundary
         return "Cannot verify the Discord caller's voice channel; run /voice join first."
 
     try:
@@ -1928,7 +1928,7 @@ async def start_or_join_session(*, invocation=None, host_execution_attachment=No
             raise TalkDiscordError("this profile has no Discord adapter")
     except TalkDiscordError as exc:
         return str(exc)
-    except Exception:
+    except Exception:  # noqa: BLE001 — gateway/Discord boundary
         return "Cannot resolve this profile's Discord voice adapter."
 
     import asyncio
@@ -1963,14 +1963,14 @@ async def start_or_join_session(*, invocation=None, host_execution_attachment=No
                 return "Discord refused the voice-channel connection."
             joined_client = getattr(adapter, "_voice_clients", {}).get(guild_id)
             bridge = resolve_voice_bridge(guild_id)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — gateway/Discord boundary
             _log.warning("Talk auto-join failed (%s)", _safe_exception_name(exc))
             if joined_client is not None and (
                 getattr(adapter, "_voice_clients", {}).get(guild_id) is joined_client
             ):
                 try:
                     await adapter.leave_voice_channel(guild_id)
-                except Exception:
+                except Exception:  # noqa: BLE001 — gateway/Discord boundary
                     _log.warning("Talk auto-join rollback failed", exc_info=True)
             return "Could not connect to that Discord voice channel."
 
@@ -1986,7 +1986,7 @@ async def start_or_join_session(*, invocation=None, host_execution_attachment=No
         if getattr(adapter, "_voice_clients", {}).get(guild_id) is bridge["voice_client"]:
             try:
                 await adapter.leave_voice_channel(guild_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — gateway/Discord boundary
                 _log.warning("Could not undo failed Talk auto-join", exc_info=True)
         return result
 
@@ -2005,7 +2005,7 @@ async def _release_talk_owned_voice(ownership: tuple, generation: int) -> None:
             return
         try:
             await adapter.leave_voice_channel(guild_id)
-        except Exception:
+        except Exception:  # noqa: BLE001 — gateway/Discord boundary
             _log.warning("Could not disconnect Talk-owned Discord voice", exc_info=True)
 
 
