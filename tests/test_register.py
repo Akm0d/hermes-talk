@@ -448,8 +448,8 @@ def test_join_with_trusted_discord_context_routes_through_cold_join(plugin, monk
     )
     seen = []
 
-    async def auto_join(*, invocation, host_execution_attachment):
-        seen.append((invocation, host_execution_attachment))
+    async def auto_join(*, invocation, source, host_execution_attachment):
+        seen.append((invocation, source, host_execution_attachment))
         return "Starting Talk through the Discord connection"
 
     monkeypatch.setattr(plugin.talk_discord, "start_or_join_session", auto_join)
@@ -459,7 +459,31 @@ def test_join_with_trusted_discord_context_routes_through_cold_join(plugin, monk
         return await result
 
     assert asyncio.run(call()) == "Starting Talk through the Discord connection"
-    assert seen == [(invocation, attachment)]
+    assert seen == [(invocation, None, attachment)]
+
+
+
+def test_join_passes_discord_source_into_auto_join(plugin, monkeypatch):
+    ctx = StubCtx()
+    plugin.register(ctx)
+    handler = ctx.commands["talk"]["handler"]
+    source = types.SimpleNamespace(
+        platform=types.SimpleNamespace(value="discord"),
+        scope_id="7", user_id="42", profile="migi-discord",
+    )
+    captured = []
+
+    async def auto_join(*, invocation, source, host_execution_attachment):
+        captured.append((invocation, source, host_execution_attachment))
+        return "Starting direct voice"
+
+    monkeypatch.setattr(plugin.talk_discord, "start_or_join_session", auto_join)
+
+    async def run():
+        return await handler("join", source=source)
+
+    assert asyncio.run(run()) == "Starting direct voice"
+    assert captured == [(None, source, None)]
 
 
 def test_join_on_an_older_host_keeps_the_explicitly_limited_fallback(plugin, monkeypatch):
