@@ -1883,11 +1883,21 @@ def trusted_discord_caller_available() -> bool:
         return False
 
 
-async def start_or_join_session(*, invocation=None, host_execution_attachment=None) -> str:
+async def start_or_join_session(*, invocation=None, source=None, host_execution_attachment=None) -> str:
     """Preserve upstream's connected path; auto-join only with trusted Discord proof."""
     capture = getattr(invocation, "capture_discord_task_context_proof", None)
     try:
-        if callable(capture):
+        if source is not None:
+            # Gateway already admitted this message through the receiving bot.
+            # Unlike ambient session context, source names the actual sender,
+            # guild and routed profile for this invocation.
+            platform = getattr(getattr(source, "platform", None), "value", None)
+            if platform != "discord" or getattr(source, "profile_route_rejected", False):
+                raise ValueError("not an admitted Discord source")
+            guild_id = getattr(source, "scope_id", None)
+            user_id = getattr(source, "user_id", None)
+            asserted_profile = getattr(source, "profile", None)
+        elif callable(capture):
             proof = capture()
             guild_id, user_id = proof["guild_id"], proof["operator_user_id"]
             asserted_profile = proof.get("profile")
@@ -1926,6 +1936,12 @@ async def start_or_join_session(*, invocation=None, host_execution_attachment=No
         adapter = _resolve_discord_adapter_for_profile(runner, _resolve_current_profile())
         if adapter is None:
             raise TalkDiscordError("this profile has no Discord adapter")
+        if source is not None:
+            # Do not trust only the runtime route: require this exact adapter
+            # to be the admitted sender's receiving bot.
+            owned = runner._delivery_adapter_for(source)
+            if owned is not adapter:
+                raise TalkDiscordError("the caller's Discord bot does not match this profile")
     except TalkDiscordError as exc:
         return str(exc)
     except Exception:  # noqa: BLE001 — gateway/Discord boundary
