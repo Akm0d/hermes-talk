@@ -1871,14 +1871,6 @@ def start_core_session(factory: object, guild_id: int | None = None) -> str:
 
 async def start_or_join_session(*, invocation=None, host_execution_attachment=None) -> str:
     """Preserve upstream's connected path; auto-join only with trusted Discord proof."""
-    try:
-        resolve_voice_bridge()
-    except TalkDiscordError as exc:
-        if "run the join command first" not in str(exc):
-            return str(exc)
-    else:
-        return start_session(host_execution_attachment=host_execution_attachment)
-
     capture = getattr(invocation, "capture_discord_task_context_proof", None)
     if not callable(capture):
         return "Cannot verify the Discord caller's voice channel; run /voice join first."
@@ -1915,17 +1907,26 @@ async def start_or_join_session(*, invocation=None, host_execution_attachment=No
     import asyncio
     lock = _AUTO_JOIN_LOCKS.setdefault(guild_id, asyncio.Lock())
     async with lock:
-        # A concurrent caller may have joined while this call awaited the lock.
+        # Route to the verified caller's guild, never whichever guild the bot
+        # happens to be connected to first.
         try:
-            resolve_voice_bridge(guild_id)
+            bridge = resolve_voice_bridge(guild_id)
         except TalkDiscordError as exc:
             if "not in a voice channel" not in str(exc):
                 return str(exc)
         else:
+            caller_channel = await adapter.get_user_voice_channel(guild_id, str(user_id))
+            if caller_channel is None or (
+                getattr(bridge["voice_client"], "channel", None) is not None
+                and getattr(bridge["voice_client"].channel, "id", None)
+                != getattr(caller_channel, "id", None)
+            ):
+                return "Migi is connected to another voice channel; use /voice leave first."
             return start_session(
                 guild_id=guild_id, host_execution_attachment=host_execution_attachment
             )
 
+        joined_client = None
         try:
             channel = await adapter.get_user_voice_channel(guild_id, str(user_id))
             if channel is None or getattr(getattr(channel, "guild", None), "id", None) != guild_id:
@@ -1933,9 +1934,17 @@ async def start_or_join_session(*, invocation=None, host_execution_attachment=No
             # No text-channel binding: do not route speech through legacy agent/TTS.
             if not await adapter.join_voice_channel(channel):
                 return "Discord refused the voice-channel connection."
+            joined_client = getattr(adapter, "_voice_clients", {}).get(guild_id)
             bridge = resolve_voice_bridge(guild_id)
         except Exception as exc:
             _log.warning("Talk auto-join failed (%s)", _safe_exception_name(exc))
+            if joined_client is not None and (
+                getattr(adapter, "_voice_clients", {}).get(guild_id) is joined_client
+            ):
+                try:
+                    await adapter.leave_voice_channel(guild_id)
+                except Exception:
+                    _log.warning("Talk auto-join rollback failed", exc_info=True)
             return "Could not connect to that Discord voice channel."
 
         result = start_session(
@@ -2198,6 +2207,7 @@ def reset_for_tests() -> None:
         _LAST_FAILURE = None
         _LAST_FAILURE_GENERATION = None
         _SESSION_GENERATION = 0
+        _AUTO_JOIN_LOCKS.clear()
         for notification in _NOTIFICATION_TASKS:
             notification.cancel()
         _NOTIFICATION_TASKS.clear()
