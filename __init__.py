@@ -277,7 +277,7 @@ def _talk_command(raw_args: str = "", invocation=None) -> str:
         # Preserve upstream's legacy invocation path on older hosts. On a
         # compatible host, a trusted Discord proof enables cold auto-join.
         proof_capture = getattr(invocation, "capture_discord_task_context_proof", None)
-        if callable(proof_capture):
+        if callable(proof_capture) or talk_discord.trusted_discord_caller_available():
             return talk_discord.start_or_join_session(
                 invocation=invocation, host_execution_attachment=attachment
             )
