@@ -2379,3 +2379,154 @@ def test_old_delayed_receipt_cannot_clear_identical_new_generation_failure(monke
             await asyncio.gather(*talk_discord._NOTIFICATION_TASKS)
 
     asyncio.run(scenario())
+
+
+# -- fork-only cold /talk join ------------------------------------------------
+
+
+def _auto_join_host(monkeypatch):
+    """A secondary-profile bot, distinct from the default bot."""
+    from unittest.mock import AsyncMock
+
+    adapter = _fake_host(monkeypatch)
+    runner = sys.modules["gateway.run"]._gateway_runner_ref()
+    runner.adapters = {"discord": object()}  # wrong-profile bot must never be used
+    runner._profile_adapters = {"migi-discord": {"discord": adapter}}
+    runner._primary_profile_name = "default"
+    monkeypatch.setattr(talk_discord, "_resolve_current_profile", lambda: "migi-discord")
+    channel = types.SimpleNamespace(id=55, guild=types.SimpleNamespace(id=7))
+    adapter._voice_text_channels = {}
+    adapter._voice_clients = {}
+    adapter._voice_receivers = {}
+    adapter.get_user_voice_channel = AsyncMock(return_value=channel)
+    adapter.leave_voice_channel = AsyncMock()
+
+    async def join(requested, **kwargs):
+        assert requested is channel
+        assert "text_channel_id" not in kwargs or kwargs["text_channel_id"] is None
+        adapter._voice_clients[7] = types.SimpleNamespace(channel=channel)
+        adapter._voice_receivers[7] = object()
+        return True
+
+    adapter.join_voice_channel = AsyncMock(side_effect=join)
+    invocation = types.SimpleNamespace(
+        capture_discord_task_context_proof=lambda: {
+            "guild_id": 7, "operator_user_id": 42,
+            "profile": "migi-discord", "proof": "host-only-proof",
+        }
+    )
+    return adapter, invocation
+
+
+def test_auto_join_cold_room_preserves_profile_and_avoids_transcript_binding(monkeypatch):
+    async def scenario():
+        adapter, invocation = _auto_join_host(monkeypatch)
+        launched = []
+
+        def start(*, guild_id, host_execution_attachment):
+            launched.append((guild_id, host_execution_attachment))
+            with talk_discord._SESSION_LOCK:
+                talk_discord._SESSION.update({
+                    "guild_id": guild_id,
+                    "generation": 1,
+                    "task": asyncio.create_task(asyncio.sleep(60)),
+                })
+            return "Starting voice"
+
+        monkeypatch.setattr(talk_discord, "start_session", start)
+        receipt = await talk_discord.start_or_join_session(
+            invocation=invocation, host_execution_attachment="attached"
+        )
+        assert receipt == "Starting voice"
+        assert launched == [(7, "attached")]
+        adapter.join_voice_channel.assert_awaited_once()
+        assert adapter._voice_text_channels == {}
+        with talk_discord._SESSION_LOCK:
+            ownership = talk_discord._SESSION["talk_owned_voice"]
+            task = talk_discord._SESSION["task"]
+            talk_discord._SESSION.clear()
+        assert ownership[0] is adapter and ownership[1] == 7
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await talk_discord._release_talk_owned_voice(ownership, 1)
+        adapter.leave_voice_channel.assert_awaited_once_with(7)
+
+    asyncio.run(scenario())
+
+
+def test_auto_join_reuses_existing_connection_without_claiming_it(monkeypatch):
+    async def scenario():
+        adapter, invocation = _auto_join_host(monkeypatch)
+        channel = await adapter.get_user_voice_channel(7, "42")
+        vc = types.SimpleNamespace(channel=channel)
+        adapter._voice_clients[7] = vc
+        adapter._voice_receivers[7] = object()
+        calls = []
+        monkeypatch.setattr(
+            talk_discord, "start_session",
+            lambda *, guild_id, host_execution_attachment: (
+                calls.append((guild_id, host_execution_attachment)) or "Starting existing"
+            ),
+        )
+        result = await talk_discord.start_or_join_session(invocation=invocation)
+        assert result == "Starting existing"
+        assert calls == [(7, None)]
+        adapter.join_voice_channel.assert_not_awaited()
+        adapter.leave_voice_channel.assert_not_awaited()
+
+    asyncio.run(scenario())
+
+
+def test_auto_join_rejects_wrong_profile_and_missing_proof(monkeypatch):
+    async def scenario():
+        adapter, invocation = _auto_join_host(monkeypatch)
+        invocation.capture_discord_task_context_proof = lambda: {
+            "guild_id": 7, "operator_user_id": 42,
+            "profile": "default", "proof": "host-only-proof",
+        }
+        result = await talk_discord.start_or_join_session(invocation=invocation)
+        assert "Cannot verify" in result
+        result = await talk_discord.start_or_join_session(invocation=object())
+        assert "Cannot verify" in result
+        adapter.join_voice_channel.assert_not_awaited()
+
+    asyncio.run(scenario())
+
+
+def test_auto_join_rejects_another_channel_without_moving_bot(monkeypatch):
+    async def scenario():
+        adapter, invocation = _auto_join_host(monkeypatch)
+        other = types.SimpleNamespace(id=999, guild=types.SimpleNamespace(id=7))
+        adapter._voice_clients[7] = types.SimpleNamespace(channel=other)
+        adapter._voice_receivers[7] = object()
+        receipt = await talk_discord.start_or_join_session(invocation=invocation)
+        assert "another voice channel" in receipt
+        adapter.join_voice_channel.assert_not_awaited()
+
+    asyncio.run(scenario())
+
+
+def test_auto_join_undoes_connection_if_talk_refuses_start(monkeypatch):
+    async def scenario():
+        adapter, invocation = _auto_join_host(monkeypatch)
+        monkeypatch.setattr(
+            talk_discord, "start_session",
+            lambda *, guild_id, host_execution_attachment: "Session refused",
+        )
+        result = await talk_discord.start_or_join_session(invocation=invocation)
+        assert result == "Session refused"
+        adapter.leave_voice_channel.assert_awaited_once_with(7)
+
+    asyncio.run(scenario())
+
+
+def test_auto_join_cleanup_never_disconnects_replaced_bridge(monkeypatch):
+    async def scenario():
+        adapter, _invocation = _auto_join_host(monkeypatch)
+        original = object()
+        adapter._voice_clients[7] = object()
+        await talk_discord._release_talk_owned_voice((adapter, 7, original), 1)
+        adapter.leave_voice_channel.assert_not_awaited()
+
+    asyncio.run(scenario())
+
