@@ -1869,24 +1869,51 @@ def start_core_session(factory: object, guild_id: int | None = None) -> str:
 
 
 
+def trusted_discord_caller_available() -> bool:
+    """Whether the host has authenticated the invoking Discord actor and guild."""
+    try:
+        from gateway.session_context import get_session_env
+        return (
+            get_session_env("HERMES_SESSION_PLATFORM") == "discord"
+            and str(get_session_env("HERMES_SESSION_SCOPE_ID") or "").isdecimal()
+            and str(get_session_env("HERMES_SESSION_ACTOR_ID") or "").isdecimal()
+            and bool(get_session_env("HERMES_SESSION_PROFILE"))
+        )
+    except (ImportError, AttributeError):
+        return False
+
+
 async def start_or_join_session(*, invocation=None, host_execution_attachment=None) -> str:
     """Preserve upstream's connected path; auto-join only with trusted Discord proof."""
     capture = getattr(invocation, "capture_discord_task_context_proof", None)
-    if not callable(capture):
-        return "Cannot verify the Discord caller's voice channel; run /voice join first."
     try:
-        proof = capture()
-        guild_id, user_id = proof["guild_id"], proof["operator_user_id"]
+        if callable(capture):
+            proof = capture()
+            guild_id, user_id = proof["guild_id"], proof["operator_user_id"]
+            asserted_profile = proof.get("profile")
+            if not proof.get("proof"):
+                raise ValueError("missing host authorization")
+        else:
+            # Current Hermes gateway exports these as request-scoped
+            # ContextVars. In Discord, scope_id is the guild and actor_id
+            # is the speaker who invoked the command (not the session route).
+            from gateway.session_context import get_session_env
+            if get_session_env("HERMES_SESSION_PLATFORM") != "discord":
+                raise ValueError("not a Discord invocation")
+            guild_id = get_session_env("HERMES_SESSION_SCOPE_ID")
+            user_id = get_session_env("HERMES_SESSION_ACTOR_ID")
+            asserted_profile = get_session_env("HERMES_SESSION_PROFILE")
+
         if not all(
             type(v) is int or (isinstance(v, str) and v.isdecimal())
             for v in (guild_id, user_id)
         ):
             raise ValueError("invalid Discord identifiers")
         guild_id, user_id = int(guild_id), int(user_id)
-        if guild_id <= 0 or user_id <= 0 or not proof.get("proof"):
-            raise ValueError("incomplete Discord proof")
+        if guild_id <= 0 or user_id <= 0:
+            raise ValueError("incomplete Discord identity")
         profile_name = _resolve_current_profile()
-        if profile_name and proof.get("profile") != profile_name:
+        if profile_name and asserted_profile != profile_name:
             raise ValueError("profile mismatch")
     except Exception:
         return "Cannot verify the Discord caller's voice channel; run /voice join first."
