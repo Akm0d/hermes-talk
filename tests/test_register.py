@@ -435,6 +435,33 @@ def test_join_captures_and_forwards_the_exact_host_execution_attachment(plugin, 
     assert forwarded == [attachment]
 
 
+def test_join_with_trusted_discord_context_routes_through_cold_join(plugin, monkeypatch):
+    ctx = StubCtx()
+    plugin.register(ctx)
+    handler = ctx.commands["talk"]["handler"]
+    attachment = object()
+    invocation = types.SimpleNamespace(
+        capture_realtime_execution_attachment=lambda: attachment,
+    )
+    monkeypatch.setattr(
+        plugin.talk_discord, "trusted_discord_caller_available", lambda: True
+    )
+    seen = []
+
+    async def auto_join(*, invocation, host_execution_attachment):
+        seen.append((invocation, host_execution_attachment))
+        return "Starting Talk through the Discord connection"
+
+    monkeypatch.setattr(plugin.talk_discord, "start_or_join_session", auto_join)
+
+    async def call():
+        result = handler("join", invocation=invocation)
+        return await result
+
+    assert asyncio.run(call()) == "Starting Talk through the Discord connection"
+    assert seen == [(invocation, attachment)]
+
+
 def test_join_on_an_older_host_keeps_the_explicitly_limited_fallback(plugin, monkeypatch):
     ctx = StubCtx()
     plugin.register(ctx)
