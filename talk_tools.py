@@ -415,6 +415,24 @@ _TOOL_PAUSE_VOICE_INPUT: dict = {
 }
 
 
+_TOOL_END_VOICE_CALL: dict = {
+    "type": "function",
+    "name": "end_voice_call",
+    "description": (
+        "End your Discord voice call when a participant clearly says goodbye "
+        "TO YOU and intends to end the conversation. No exact phrase or agent "
+        "name is required. Never call for a goodbye to someone else, a quoted "
+        "farewell, or an ambiguous mention. This only disconnects your current "
+        "voice channel; it performs no other actions."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    },
+}
+
+
 class TalkToolError(Exception):
     """Unknown tool name or otherwise malformed tool call."""
 
@@ -442,13 +460,17 @@ def plugin_version() -> str:
 _ASSISTANT_TOOL_NAMES = frozenset({
     "search_memory", "search_vault", "delegate_task", "check_work",
     "resolve_approval", "talk_capabilities", "pause_voice_input",
+    "end_voice_call",
 })
 _MINIMAL_TOOL_NAMES = frozenset({
     "search_memory", "search_vault", "talk_capabilities", "pause_voice_input",
+    "end_voice_call",
 })
 
 
-def default_talk_tools(*, pausable: bool = False) -> list[dict]:
+def default_talk_tools(
+    *, pausable: bool = False, natural_leave: bool = False
+) -> list[dict]:
     """The tool set advertised to a new Talk session (fresh copies per call).
 
     The base set is unconditional. ``search_vault`` is CONDITIONAL: it is
@@ -478,6 +500,8 @@ def default_talk_tools(*, pausable: bool = False) -> list[dict]:
     ]
     if pausable:
         tools.append(_TOOL_PAUSE_VOICE_INPUT)
+    if natural_leave:
+        tools.append(_TOOL_END_VOICE_CALL)
     try:
         if talk_vault.available():
             tools.insert(1, _TOOL_SEARCH_VAULT)
@@ -505,6 +529,15 @@ def execute_talk_tool(name: str, arguments: dict | None) -> str:
 
 
 # -- handlers -----------------------------------------------------------------
+
+
+def _handle_end_voice_call(_arguments: dict) -> str:
+    # Imported lazily: Discord's transport and this tool module load each other.
+    try:
+        from . import talk_discord
+    except ImportError:
+        import talk_discord
+    return talk_discord.request_natural_departure()
 
 
 def _handle_search_memory(arguments: dict) -> str:
@@ -895,6 +928,7 @@ _HANDLERS = {
     "talk_status": _handle_talk_status,
     "talk_capabilities": _handle_talk_capabilities,
     "pause_voice_input": _handle_pause_voice_input,
+    "end_voice_call": _handle_end_voice_call,
 }
 
 
