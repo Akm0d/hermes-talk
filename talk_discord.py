@@ -2045,6 +2045,7 @@ def start_session(
                 ),
                 "generation": generation,
                 "loop": loop,
+                "profile": talk_config.agent_profile(),
             }
         )
 
@@ -2154,6 +2155,9 @@ def request_voice_departure() -> str:
         running = _SESSION.get("task")
         audio = _SESSION.get("audio")
         generation = _SESSION.get("generation")
+        owning_profile = _SESSION.get("profile")
+    if owning_profile is not None and owning_profile != talk_config.agent_profile():
+        return "The active Discord voice call belongs to another agent profile."
     if running is None or running.done() or audio is None:
         return "No active Discord Talk call to leave."
     bridge = getattr(audio, "_bridge", None)
