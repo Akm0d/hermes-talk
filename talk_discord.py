@@ -2042,6 +2042,7 @@ def start_session(
                     "provider-host-tools" if host_execution_attachment is not None else "legacy"
                 ),
                 "generation": generation,
+                "loop": loop,
             }
         )
 
@@ -2085,8 +2086,9 @@ def request_voice_departure() -> str:
     voice_client = bridge["voice_client"]
     if getattr(adapter, "_voice_clients", {}).get(guild_id) is not voice_client:
         return "The Discord voice connection has changed; departure cancelled."
-    loop = _running_loop()
-    if loop is None:
+    with _SESSION_LOCK:
+        loop = _SESSION.get("loop")
+    if loop is None or loop.is_closed():
         return "The Discord gateway event loop is unavailable."
 
     async def _leave() -> None:
@@ -2111,7 +2113,10 @@ def request_voice_departure() -> str:
                 "Discord voice leave failed (%s)", _safe_exception_name(exc)
             )
 
-    loop.create_task(_leave())
+    try:
+        loop.call_soon_threadsafe(lambda: loop.create_task(_leave()))
+    except RuntimeError:
+        return "The Discord gateway event loop has stopped."
     return "Leaving the Discord voice channel."
 
 
