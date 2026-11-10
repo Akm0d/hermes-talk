@@ -2379,3 +2379,116 @@ def test_old_delayed_receipt_cannot_clear_identical_new_generation_failure(monke
             await asyncio.gather(*talk_discord._NOTIFICATION_TASKS)
 
     asyncio.run(scenario())
+
+
+# -- agent-initiated and unattended Discord departure -------------------------
+
+
+@pytest.mark.asyncio
+async def test_leave_voice_channel_tool_marshals_worker_request_to_owner_loop():
+    channel = types.SimpleNamespace(members=[])
+    voice_client = types.SimpleNamespace(channel=channel)
+    calls = []
+    class Adapter:
+        _voice_clients = {42: voice_client}
+
+        async def leave_voice_channel(self, guild_id):
+            calls.append(guild_id)
+
+    adapter = Adapter()
+    bridge = {"adapter": adapter, "guild_id": 42, "voice_client": voice_client}
+    running = asyncio.create_task(asyncio.sleep(10))
+    audio = types.SimpleNamespace(_bridge=bridge)
+    talk_discord._SESSION.update({
+        "task": running, "audio": audio, "generation": 1,
+        "guild_id": 42, "loop": asyncio.get_running_loop(),
+    })
+    result = await asyncio.to_thread(talk_discord.request_voice_departure)
+    assert result == "Leaving the Discord voice channel."
+    await asyncio.sleep(0.6)
+    assert calls == [42]
+    assert running.cancelled()
+    await asyncio.gather(running, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_leave_tool_cannot_disconnect_replaced_session_or_voice_client():
+    voice_client = types.SimpleNamespace(channel=types.SimpleNamespace(members=[]))
+    calls = []
+    class Adapter:
+        _voice_clients = {42: voice_client}
+        async def leave_voice_channel(self, guild_id):
+            calls.append(guild_id)
+
+    bridge = {"adapter": Adapter(), "guild_id": 42, "voice_client": voice_client}
+    running = asyncio.create_task(asyncio.sleep(10))
+    audio = types.SimpleNamespace(_bridge=bridge)
+    talk_discord._SESSION.update({
+        "task": running, "audio": audio, "generation": 1,
+        "guild_id": 42, "loop": asyncio.get_running_loop(),
+    })
+    assert await asyncio.to_thread(talk_discord.request_voice_departure) == (
+        "Leaving the Discord voice channel."
+    )
+    talk_discord._SESSION["generation"] = 2
+    await asyncio.sleep(0.6)
+    assert calls == []
+    assert not running.cancelled()
+    running.cancel()
+    await asyncio.gather(running, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_empty_room_departure_is_reversed_when_a_human_joins(monkeypatch):
+    monkeypatch.setattr(talk_discord, "EMPTY_ROOM_POLL_S", 0.01)
+    monkeypatch.setattr(talk_discord, "EMPTY_ROOM_GRACE_S", 0.04)
+    channel = types.SimpleNamespace(members=[])
+    voice_client = types.SimpleNamespace(channel=channel)
+    calls = []
+    class Adapter:
+        _voice_clients = {42: voice_client}
+        async def leave_voice_channel(self, guild_id):
+            calls.append(guild_id)
+
+    bridge = {"adapter": Adapter(), "guild_id": 42, "voice_client": voice_client}
+    running = asyncio.create_task(asyncio.sleep(10))
+    audio = types.SimpleNamespace(_bridge=bridge)
+    talk_discord._SESSION.update({
+        "task": running, "audio": audio, "generation": 1,
+        "guild_id": 42, "loop": asyncio.get_running_loop(),
+    })
+    watcher = asyncio.create_task(talk_discord._watch_empty_room(1, running, audio))
+    await asyncio.sleep(0.025)
+    channel.members.append(types.SimpleNamespace(bot=False))
+    await asyncio.sleep(0.07)
+    assert calls == []
+    assert not running.cancelled()
+    running.cancel()
+    await asyncio.gather(running, watcher, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_empty_room_departure_cancels_talk_and_uses_host_leave(monkeypatch):
+    monkeypatch.setattr(talk_discord, "EMPTY_ROOM_POLL_S", 0.01)
+    monkeypatch.setattr(talk_discord, "EMPTY_ROOM_GRACE_S", 0.03)
+    channel = types.SimpleNamespace(members=[types.SimpleNamespace(bot=True)])
+    voice_client = types.SimpleNamespace(channel=channel)
+    calls = []
+    class Adapter:
+        _voice_clients = {42: voice_client}
+        async def leave_voice_channel(self, guild_id):
+            calls.append(guild_id)
+
+    bridge = {"adapter": Adapter(), "guild_id": 42, "voice_client": voice_client}
+    running = asyncio.create_task(asyncio.sleep(10))
+    audio = types.SimpleNamespace(_bridge=bridge)
+    talk_discord._SESSION.update({
+        "task": running, "audio": audio, "generation": 1,
+        "guild_id": 42, "loop": asyncio.get_running_loop(),
+    })
+    await asyncio.wait_for(
+        talk_discord._watch_empty_room(1, running, audio), timeout=0.5,
+    )
+    assert calls == [42]
+    assert running.cancelled()
+    await asyncio.gather(running, return_exceptions=True)
