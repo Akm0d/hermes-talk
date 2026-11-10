@@ -9,6 +9,7 @@ import time
 import pytest
 
 import talk_capabilities
+import talk_config
 import talk_host
 import talk_operator_auth
 import talk_runs
@@ -88,6 +89,54 @@ def test_the_pause_tool_is_advertised_only_when_the_session_asks_for_it():
         "pause_voice_input",
     ]
     assert [tool["name"] for tool in talk_tools.default_talk_tools(pausable=False)] == _BASE_TOOLS
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected"),
+    [
+        ("full", [*_BASE_TOOLS, "pause_voice_input"]),
+        (
+            "assistant",
+            [
+                "search_memory", "delegate_task", "check_work",
+                "resolve_approval", "talk_capabilities", "pause_voice_input",
+            ],
+        ),
+        ("minimal", ["search_memory", "talk_capabilities", "pause_voice_input"]),
+    ],
+)
+def test_voice_tool_profiles_are_explicit_and_keep_safe_pause(monkeypatch, profile, expected):
+    monkeypatch.setattr(talk_config, "tool_profile", lambda: profile)
+    assert [item["name"] for item in talk_tools.default_talk_tools(pausable=True)] == expected
+    assert "pause_voice_input" not in [
+        item["name"] for item in talk_tools.default_talk_tools(pausable=False)
+    ]
+
+
+def test_voice_tool_profile_preserves_optional_vault_availability(monkeypatch):
+    monkeypatch.setattr(talk_config, "tool_profile", lambda: "assistant")
+    monkeypatch.setattr(talk_vault, "available", lambda: True)
+    names = [item["name"] for item in talk_tools.default_talk_tools()]
+    assert names[:2] == ["search_memory", "search_vault"]
+    assert "delegate_task" in names
+    monkeypatch.setattr(talk_vault, "available", lambda: False)
+    assert "search_vault" not in [
+        item["name"] for item in talk_tools.default_talk_tools()
+    ]
+
+
+def test_voice_profiles_are_scoped_and_fail_closed(monkeypatch):
+    monkeypatch.setattr(talk_config, "_talk_env_get", lambda key: {
+        "TALK_TOOL_PROFILE": "assistant",
+        "TALK_PROMPT_PROFILE": "compact",
+    }.get(key))
+    assert talk_config.tool_profile() == "assistant"
+    assert talk_config.prompt_profile() == "compact"
+    monkeypatch.setattr(talk_config, "_talk_env_get", lambda key: "typo")
+    with pytest.raises(talk_config.TalkConfigError, match="TALK_TOOL_PROFILE"):
+        talk_config.tool_profile()
+    with pytest.raises(talk_config.TalkConfigError, match="TALK_PROMPT_PROFILE"):
+        talk_config.prompt_profile()
 
 
 def test_the_vault_tool_is_advertised_only_when_it_can_be_served(monkeypatch):
