@@ -97,6 +97,8 @@ KEEPALIVE_INTERVAL_S = 20.0
 #: Allow a brief discord.py reconnect transition, but never synthesize
 #: healthy-looking silence forever on a client that is no longer connected.
 BRIDGE_DISCONNECT_GRACE_S = 1.0
+EMPTY_ROOM_GRACE_S = 8.0
+EMPTY_ROOM_POLL_S = 1.0
 
 
 def _running_loop():
@@ -2072,7 +2074,7 @@ async def _watch_empty_room(generation, running, audio) -> None:
 
     empty_since = None
     while not running.done():
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(EMPTY_ROOM_POLL_S)
         with _SESSION_LOCK:
             owned = (
                 _SESSION.get("generation") == generation
@@ -2109,7 +2111,7 @@ async def _watch_empty_room(generation, running, audio) -> None:
             empty_since = None
         elif empty_since is None:
             empty_since = now
-        elif now - empty_since >= 8.0:
+        elif now - empty_since >= EMPTY_ROOM_GRACE_S:
             fresh = getattr(getattr(voice_client, "channel", None), "members", None)
             if fresh is None:
                 empty_since = None
