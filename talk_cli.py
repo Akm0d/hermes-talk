@@ -1593,6 +1593,7 @@ async def run_talk_session(
         # or socket is spent. The rules live in talk_config.cascade_voice_config
         # so every lane (terminal, Discord, dashboard) refuses identically.
         voice_mode = talk_config.voice_mode()
+        prompt_profile = talk_config.prompt_profile()
         cascade_config: tuple[str, str, str] | None = None
         if voice_mode == "cascade":
             cascade_config = talk_config.cascade_voice_config(provider)
@@ -1644,6 +1645,7 @@ async def run_talk_session(
         lane=lane,
         host_summary=_host_summary_line() if lane == "cli" else None,
         capabilities=talk_capabilities.instruction_section(catalog_snapshot),
+        prompt_profile=prompt_profile,
     )
 
     # Find out NOW whether the api_server lane is up. The verdict is needed by
