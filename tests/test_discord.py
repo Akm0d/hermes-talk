@@ -2407,8 +2407,8 @@ async def test_leave_voice_channel_tool_marshals_worker_request_to_owner_loop():
     assert result == "Leaving the Discord voice channel."
     await asyncio.sleep(0.6)
     assert calls == [42]
-    assert running.cancelled()
     await asyncio.gather(running, return_exceptions=True)
+    assert running.cancelled()
 
 
 @pytest.mark.asyncio
@@ -2490,5 +2490,5 @@ async def test_empty_room_departure_cancels_talk_and_uses_host_leave(monkeypatch
         talk_discord._watch_empty_room(1, running, audio), timeout=0.5,
     )
     assert calls == [42]
-    assert running.cancelled()
     await asyncio.gather(running, return_exceptions=True)
+    assert running.cancelled()
