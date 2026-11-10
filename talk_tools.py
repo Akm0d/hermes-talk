@@ -437,6 +437,17 @@ def plugin_version() -> str:
         return "unknown"
 
 
+# Narrow toolsets are intentionally opt-in. They keep the voice model's
+# direct tool surface small while delegation executes through Hermes.
+_ASSISTANT_TOOL_NAMES = frozenset({
+    "search_memory", "search_vault", "delegate_task", "check_work",
+    "resolve_approval", "talk_capabilities", "pause_voice_input",
+})
+_MINIMAL_TOOL_NAMES = frozenset({
+    "search_memory", "search_vault", "talk_capabilities", "pause_voice_input",
+})
+
+
 def default_talk_tools(*, pausable: bool = False) -> list[dict]:
     """The tool set advertised to a new Talk session (fresh copies per call).
 
@@ -472,6 +483,10 @@ def default_talk_tools(*, pausable: bool = False) -> list[dict]:
             tools.insert(1, _TOOL_SEARCH_VAULT)
     except Exception as exc:  # noqa: BLE001 — a missing tool, never a dead session
         _log.debug("vault availability unknown: %s: %s", type(exc).__name__, exc)
+    profile = talk_config.tool_profile()
+    if profile != "full":
+        allowed = _ASSISTANT_TOOL_NAMES if profile == "assistant" else _MINIMAL_TOOL_NAMES
+        tools = [tool for tool in tools if tool["name"] in allowed]
     return copy.deepcopy(tools)
 
 
