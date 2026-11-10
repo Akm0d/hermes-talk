@@ -13,6 +13,19 @@ named rather than smoothed.
 
 ## [Unreleased]
 
+### Fork voice profiles
+- Add profile-scoped `TALK_TOOL_PROFILE=full|assistant|minimal` and
+  `TALK_PROMPT_PROFILE=full|compact` for smaller native-S2S context budgets.
+  Defaults retain the previous full prompt and tool inventory.
+- Compact instructions preserve authority boundaries and cap the directly
+  embedded identity/capability sections. A six-tool assistant profile keeps
+  memory, delegation, work status, approvals, and capabilities (plus
+  conditional pause or vault search).
+- Add focused selection and prompt-budget regression tests and document the
+  local-model opt-in. A successful NeMo prefill and real Discord turn are
+  still required before enabling these settings on Fenix.
+
+
 ### Added
 - `TALK_PROVIDER=local`: run the voice lane on your own GPU against any
   self-hosted server that speaks the OpenAI Realtime protocol, such as
