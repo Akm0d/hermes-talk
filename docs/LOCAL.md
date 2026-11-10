@@ -99,6 +99,7 @@ prompts, set these in the **voice profile's** scoped environment:
 ```dotenv
 TALK_TOOL_PROFILE=assistant
 TALK_PROMPT_PROFILE=compact
+TALK_DISCORD_NATURAL_LEAVE=true
 ```
 
 - `TALK_TOOL_PROFILE=full` (default): all legacy Talk functions.
@@ -106,6 +107,13 @@ TALK_PROMPT_PROFILE=compact
   resolution, capabilities, and pause (when the transport supports resume).
 - `minimal`: memory search, capabilities, and conditional pause. It cannot
   delegate work or resolve approvals.
+- `TALK_DISCORD_NATURAL_LEAVE=false` (default): manual Discord departure.
+  Set `true` to advertise a `leave_voice_channel` tool to the live voice
+  model and disconnect from an otherwise empty Discord room after an 8-second
+  grace period. The model decides whether and when to invoke its tool; the
+  plugin does not match a specific phrase or name. The tool uses the owning
+  profile's existing Discord adapter to disconnect the exact connected room.
+  `/talk leave` remains an emergency/manual fallback.
 - `TALK_PROMPT_PROFILE=full` (default): existing detailed behavioral prompt.
 - `compact`: short safety/delegation contract and strict caps on the identity
   sections (PERSONA 600, USER 350, MEMORY 300, WORKING 250 characters).
