@@ -119,19 +119,16 @@ def _cache_key() -> _StatusKey:
     """
     identity = "standalone"
     try:
-        from agent.secret_scope import (
-            UnscopedSecretError,
-            current_secret_scope,
-            current_secret_scope_home,
-            is_multiplex_active,
-        )
+        import agent.secret_scope as hermes_secrets
     except ImportError:
         pass  # no Hermes host: one standalone profile per process
     else:
-        if is_multiplex_active():
-            if current_secret_scope() is None:
-                raise UnscopedSecretError("TALK_API_SERVER_URL")
-            home = current_secret_scope_home()
+        # An installed but incompatible secret-scope API must refuse, not
+        # silently downgrade a multiplexed gateway to the standalone cache.
+        if hermes_secrets.is_multiplex_active():
+            if hermes_secrets.current_secret_scope() is None:
+                raise hermes_secrets.UnscopedSecretError("TALK_API_SERVER_URL")
+            home = hermes_secrets.current_secret_scope_home()
             if home:
                 identity = f"home:{home}"
             else:
@@ -141,7 +138,7 @@ def _cache_key() -> _StatusKey:
                 except ImportError:
                     profile = None
                 if not profile:
-                    raise UnscopedSecretError(
+                    raise hermes_secrets.UnscopedSecretError(
                         "TALK_API_SERVER_URL",
                         "API-server probe has a bound scope without an identifiable profile",
                     )
