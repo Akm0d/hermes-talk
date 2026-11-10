@@ -2492,3 +2492,30 @@ async def test_empty_room_departure_cancels_talk_and_uses_host_leave(monkeypatch
     assert calls == [42]
     await asyncio.gather(running, return_exceptions=True)
     assert running.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_leave_tool_refuses_different_profile(monkeypatch):
+    from talk_config import agent_profile
+
+    voice_client = types.SimpleNamespace(channel=types.SimpleNamespace(members=[]))
+    class Adapter:
+        _voice_clients = {42: voice_client}
+        async def leave_voice_channel(self, guild_id):
+            pytest.fail("must not disconnect another profile's voice channel")
+
+    bridge = {"adapter": Adapter(), "guild_id": 42, "voice_client": voice_client}
+    running = asyncio.create_task(asyncio.sleep(10))
+    talk_discord._SESSION.update({
+        "task": running, "audio": types.SimpleNamespace(_bridge=bridge),
+        "generation": 1, "guild_id": 42,
+        "loop": asyncio.get_running_loop(), "profile": "migi-discord",
+    })
+    monkeypatch.setattr(talk_discord.talk_config, "agent_profile", lambda: "other-agent")
+    assert "another agent profile" in await asyncio.to_thread(
+        talk_discord.request_voice_departure
+    )
+    await asyncio.sleep(0.01)
+    assert not running.cancelled()
+    running.cancel()
+    await asyncio.gather(running, return_exceptions=True)
