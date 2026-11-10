@@ -417,13 +417,12 @@ _TOOL_PAUSE_VOICE_INPUT: dict = {
 
 _TOOL_END_VOICE_CALL: dict = {
     "type": "function",
-    "name": "end_voice_call",
+    "name": "leave_voice_channel",
     "description": (
-        "End your Discord voice call when a participant clearly says goodbye "
-        "TO YOU and intends to end the conversation. No exact phrase or agent "
-        "name is required. Never call for a goodbye to someone else, a quoted "
-        "farewell, or an ambiguous mention. This only disconnects your current "
-        "voice channel; it performs no other actions."
+        "Leave your currently connected Discord voice channel and end your voice "
+        "session when you determine it is appropriate to depart. This can "
+        "only disconnect your own active voice connection, not another agent "
+        "or channel."
     ),
     "parameters": {
         "type": "object",
@@ -460,11 +459,11 @@ def plugin_version() -> str:
 _ASSISTANT_TOOL_NAMES = frozenset({
     "search_memory", "search_vault", "delegate_task", "check_work",
     "resolve_approval", "talk_capabilities", "pause_voice_input",
-    "end_voice_call",
+    "leave_voice_channel",
 })
 _MINIMAL_TOOL_NAMES = frozenset({
     "search_memory", "search_vault", "talk_capabilities", "pause_voice_input",
-    "end_voice_call",
+    "leave_voice_channel",
 })
 
 
@@ -531,13 +530,13 @@ def execute_talk_tool(name: str, arguments: dict | None) -> str:
 # -- handlers -----------------------------------------------------------------
 
 
-def _handle_end_voice_call(_arguments: dict) -> str:
+def _handle_leave_voice_channel(_arguments: dict) -> str:
     # Imported lazily: Discord's transport and this tool module load each other.
     try:
         from . import talk_discord
     except ImportError:
         import talk_discord
-    return talk_discord.request_natural_departure()
+    return talk_discord.request_voice_departure()
 
 
 def _handle_search_memory(arguments: dict) -> str:
@@ -928,7 +927,7 @@ _HANDLERS = {
     "talk_status": _handle_talk_status,
     "talk_capabilities": _handle_talk_capabilities,
     "pause_voice_input": _handle_pause_voice_input,
-    "end_voice_call": _handle_end_voice_call,
+    "leave_voice_channel": _handle_leave_voice_channel,
 }
 
 
