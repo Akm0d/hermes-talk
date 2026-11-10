@@ -1515,6 +1515,7 @@ __all__ = [
     "pause_session",
     "reset_for_tests",
     "resolve_voice_bridge",
+    "request_voice_departure",
     "resume_session",
     "session_status",
     "session_to_discord",
@@ -2059,6 +2060,59 @@ def start_session(
         "Starting limited legacy provider-owned voice. Use `/talk core join` for full "
         "canonical Hermes parity; say `talk status` to check or `talk leave` to stop."
     )
+
+
+def request_voice_departure() -> str:
+    """Let the active Discord Talk agent leave its own channel.
+
+    Use the gateway's existing leave method, not a raw websocket disconnect.
+    Never resolve a target by guild alone: a multiplexed profile or reconnect
+    can replace the adapter connection while the session is still running.
+    """
+    import asyncio
+
+    with _SESSION_LOCK:
+        running = _SESSION.get("task")
+        audio = _SESSION.get("audio")
+        generation = _SESSION.get("generation")
+    if running is None or running.done() or audio is None:
+        return "No active Discord Talk call to leave."
+    bridge = getattr(audio, "_bridge", None)
+    if not isinstance(bridge, dict):
+        return "The Discord voice connection is not ready."
+    adapter = bridge["adapter"]
+    guild_id = bridge["guild_id"]
+    voice_client = bridge["voice_client"]
+    if getattr(adapter, "_voice_clients", {}).get(guild_id) is not voice_client:
+        return "The Discord voice connection has changed; departure cancelled."
+    loop = _running_loop()
+    if loop is None:
+        return "The Discord gateway event loop is unavailable."
+
+    async def _leave() -> None:
+        # Don't cancel the session synchronously from its own function call.
+        # Give the tool result a chance to travel to the realtime backend.
+        await asyncio.sleep(0.5)
+        with _SESSION_LOCK:
+            current = (
+                _SESSION.get("generation") == generation
+                and _SESSION.get("task") is running
+                and _SESSION.get("audio") is audio
+            )
+        if not current or running.done():
+            return
+        if getattr(adapter, "_voice_clients", {}).get(guild_id) is not voice_client:
+            return
+        running.cancel()
+        try:
+            await adapter.leave_voice_channel(guild_id)
+        except Exception as exc:  # noqa: BLE001 — session still closes
+            _log.warning(
+                "Discord voice leave failed (%s)", _safe_exception_name(exc)
+            )
+
+    loop.create_task(_leave())
+    return "Leaving the Discord voice channel."
 
 
 def stop_session() -> str:
