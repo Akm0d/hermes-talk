@@ -403,6 +403,31 @@ def agent_profile() -> str | None:
     return detect_agent_profile()
 
 
+# Profile-scoped realtime voice budgets. Existing behavior remains the default.
+TALK_TOOL_PROFILES = ("full", "assistant", "minimal")
+TALK_PROMPT_PROFILES = ("full", "compact")
+
+
+def tool_profile() -> str:
+    """Tools advertised directly to the realtime voice model."""
+    value = (_talk_env_get("TALK_TOOL_PROFILE") or "full").strip().lower()
+    if value not in TALK_TOOL_PROFILES:
+        raise TalkConfigError(
+            f"TALK_TOOL_PROFILE '{value}' must be one of {', '.join(TALK_TOOL_PROFILES)}"
+        )
+    return value
+
+
+def prompt_profile() -> str:
+    """Use full instructions or an opt-in bounded native-S2S prompt."""
+    value = (_talk_env_get("TALK_PROMPT_PROFILE") or "full").strip().lower()
+    if value not in TALK_PROMPT_PROFILES:
+        raise TalkConfigError(
+            f"TALK_PROMPT_PROFILE '{value}' must be one of {', '.join(TALK_PROMPT_PROFILES)}"
+        )
+    return value
+
+
 def identity_include() -> tuple[str, ...] | None:
     """Which identity sections may ride the voice prompt, or ``None`` for all.
 
@@ -1154,6 +1179,8 @@ __all__ = [
     "OPENAI_REALTIME_VOICES",
     "TALK_CASCADE_TTS_PROVIDERS",
     "TALK_PROVIDERS",
+    "TALK_PROMPT_PROFILES",
+    "TALK_TOOL_PROFILES",
     "TALK_VOICE_MODES",
     "TalkConfigError",
     "agent_profile",
@@ -1178,6 +1205,8 @@ __all__ = [
     "elevenlabs_voice_settings",
     "get_hermes_home",
     "identity_include",
+    "prompt_profile",
+    "tool_profile",
     "memory_search_timeout_s",
     "realtime_model_compatibility",
     "realtime_model_valid",
