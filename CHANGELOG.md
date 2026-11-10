@@ -23,6 +23,9 @@ named rather than smoothed.
   latency on an RTX 3090, and Windows notes are in `docs/LOCAL.md`.
 
 ### Fixed
+- Keep multiplexed Discord Talk configuration and adapters scoped to the invoking
+  Hermes profile (#185); carry that scope into asynchronous API-server probes and
+  partition cached API-server availability by profile, endpoint, and credential.
 - Live replay tests use a controlled authentication-lease clock and wait for the
   durable delivery receipt, preventing slow Windows CI runners from expiring an
   unrefreshed test lease or racing receipt persistence. Production timeouts and
