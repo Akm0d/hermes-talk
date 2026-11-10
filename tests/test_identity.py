@@ -18,6 +18,36 @@ def test_preamble_plus_the_clock_when_the_host_has_nothing():
         assert remainder.strip().endswith(talk_identity.current_moment())
 
 
+def test_compact_prompt_trims_resident_context_but_keeps_authority_rules():
+    host = {name: name.lower() * 2000 for name in ("PERSONA", "USER", "MEMORY", "WORKING")}
+    tools = talk_tools.default_talk_tools(pausable=True)
+    compact = talk_identity.build_instructions(
+        host, tools=tools, lane="discord", capabilities="tool categories " * 200,
+        prompt_profile="compact",
+    )
+    normal = talk_identity.build_instructions(
+        host, tools=tools, lane="discord", capabilities="tool categories " * 200
+    )
+    assert compact.startswith(talk_identity.COMPACT_VOICE_PREAMBLE)
+    assert len(compact) < 3600
+    assert len(compact) < len(normal)
+    assert "resolve_approval" in compact
+    assert "operator permission" in compact
+    assert "Advertised legacy tools:" in compact
+    assert "pause_voice_input" in compact
+    for name, limit in talk_identity.COMPACT_IDENTITY_CAPS.items():
+        assert (name.lower() * 2000)[:limit] in compact
+    assert talk_identity.advertised_tool_names(compact) == tuple(
+        tool["name"] for tool in tools
+    )
+
+
+def test_bad_compact_profile_rejected():
+    import pytest
+    with pytest.raises(ValueError, match="prompt profile"):
+        talk_identity.build_instructions({}, prompt_profile="unknown")
+
+
 def test_the_clock_is_built_per_call_not_at_import():
     """A module-level timestamp would freeze at import, so a gateway running
     for a week would confidently state the day it booted."""
