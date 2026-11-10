@@ -1215,6 +1215,7 @@ __all__ = [
     "catalog_startup_wait_s",
     "detect_agent_profile",
     "discord_natural_leave",
+    "discord_natural_leave",
     "discord_operator_user_ids",
     "elevenlabs_model",
     "elevenlabs_speed",
