@@ -14,6 +14,12 @@ named rather than smoothed.
 ## [Unreleased]
 
 ### Fork voice profiles
+- Add optional Discord `leave_voice_channel` agent tool, allowing the
+  realtime model to decide when to depart instead of matching hardcoded
+  phrases. When `TALK_DISCORD_NATURAL_LEAVE=true`, the plugin also leaves
+  an otherwise empty voice channel after an eight-second grace period,
+  checking the exact voice connection and active Hermes profile before
+  touching the host adapter. Manual `/talk leave` remains available.
 - Add profile-scoped `TALK_TOOL_PROFILE=full|assistant|minimal` and
   `TALK_PROMPT_PROFILE=full|compact` for smaller native-S2S context budgets.
   Defaults retain the previous full prompt and tool inventory.
