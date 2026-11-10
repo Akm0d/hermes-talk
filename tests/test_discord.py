@@ -2496,8 +2496,6 @@ async def test_empty_room_departure_cancels_talk_and_uses_host_leave(monkeypatch
 
 @pytest.mark.asyncio
 async def test_leave_tool_refuses_different_profile(monkeypatch):
-    from talk_config import agent_profile
-
     voice_client = types.SimpleNamespace(channel=types.SimpleNamespace(members=[]))
     class Adapter:
         _voice_clients = {42: voice_client}
