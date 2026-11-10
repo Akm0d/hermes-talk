@@ -48,11 +48,15 @@ def profile_scope(monkeypatch):
     scoped_module.current_secret_scope_home = lambda: (
         f"/fake/profiles/{state.get()[0]}" if state.get() else None
     )
-    if "agent" not in sys.modules:
+    parent = sys.modules.get("agent")
+    if parent is None:
         parent = ModuleType("agent")
         parent.__path__ = []
         monkeypatch.setitem(sys.modules, "agent", parent)
     monkeypatch.setitem(sys.modules, "agent.secret_scope", scoped_module)
+    # Dotted `import agent.secret_scope as ...` can resolve via the parent's
+    # existing attribute even if sys.modules contains a new child module.
+    monkeypatch.setattr(parent, "secret_scope", scoped_module, raising=False)
     monkeypatch.setattr(talk_config, "_hermes_get_secret", get_secret)
     monkeypatch.setattr(talk_apiserver, "_lane_enabled", lambda: True)
     talk_apiserver.reset_for_tests()
