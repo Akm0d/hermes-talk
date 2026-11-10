@@ -428,6 +428,22 @@ def prompt_profile() -> str:
     return value
 
 
+def discord_natural_leave() -> bool:
+    """Opt-in Discord departure on empty rooms or agent-directed farewells.
+
+    The knob is scoped to the invoking Hermes profile; a different agent's
+    voice channel must never inherit its settings.
+    """
+    raw = (_talk_env_get("TALK_DISCORD_NATURAL_LEAVE") or "false").strip().lower()
+    if raw in {"true", "1", "yes", "on"}:
+        return True
+    if raw in {"false", "0", "no", "off"}:
+        return False
+    raise TalkConfigError(
+        "TALK_DISCORD_NATURAL_LEAVE must be true or false"
+    )
+
+
 def identity_include() -> tuple[str, ...] | None:
     """Which identity sections may ride the voice prompt, or ``None`` for all.
 
@@ -1198,6 +1214,7 @@ __all__ = [
     "cascade_voice_config",
     "catalog_startup_wait_s",
     "detect_agent_profile",
+    "discord_natural_leave",
     "discord_operator_user_ids",
     "elevenlabs_model",
     "elevenlabs_speed",
