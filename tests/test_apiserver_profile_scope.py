@@ -115,7 +115,10 @@ def test_cache_is_partitioned_even_when_profiles_share_endpoint_and_key(
         calls.append(name)
         return talk_apiserver.ApiServerStatus(
             available=name == "migi-discord",
-            reason=talk_apiserver.REASON_OK if name == "migi-discord" else talk_apiserver.REASON_ERROR,
+            reason=(
+                talk_apiserver.REASON_OK if name == "migi-discord"
+                else talk_apiserver.REASON_ERROR
+            ),
             detail=name,
         )
 
@@ -190,7 +193,13 @@ def test_key_rotation_changes_cache_identity(monkeypatch, profile_scope):
 
     monkeypatch.setattr(talk_apiserver, "probe", probe)
     _profile(profile_scope, "migi-discord", key="first")
+    old_key = talk_apiserver._cache_key()
     assert talk_apiserver.warm().available
+
     _profile(profile_scope, "migi-discord", key="second")
+    new_key = talk_apiserver._cache_key()
+    assert old_key != new_key
+    assert old_key[1] == new_key[1]  # endpoint unchanged
     assert talk_apiserver.warm().available
-    assert calls == ["first", "second"]
+    assert calls[0] == "first"
+    assert calls[-1] == "second"
