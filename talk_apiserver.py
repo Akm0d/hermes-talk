@@ -46,6 +46,8 @@ TalkApiServerError with speakable text; callers on a tool handler must catch it.
 from __future__ import annotations
 
 import contextlib
+import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -97,12 +99,56 @@ class ApiServerStatus:
     detail: str
 
 
-#: Cached verdict + when it was taken. Guarded because tool calls arrive from
-#: the event loop, run workers, and (in the dashboard) a thread pool.
+#: A multiplexed Hermes gateway loads one Talk module for many profiles.
+#: Cache both the verdict and the in-flight flag per profile/configuration.
+#: A digest avoids retaining an API key verbatim in the cache dictionary key.
+_StatusKey = tuple[str, str, bytes]
 _STATUS_LOCK = threading.Lock()
-_STATUS: ApiServerStatus | None = None
-_STATUS_AT: float = 0.0
-_REFRESHING = False
+_STATUS: dict[_StatusKey, tuple[ApiServerStatus, float]] = {}
+_REFRESHING: set[_StatusKey] = set()
+_CACHE_EPOCH = 0
+_MAX_CACHED_PROFILES = 64
+
+
+def _cache_key() -> _StatusKey:
+    """Identify the *owning* profile and effective API-server configuration.
+
+    A missing secret scope under multiplexing must not read or reuse a cached
+    verdict from any other profile. Hermes stamps a profile home on its scoped
+    turns; the session profile is a fallback for older scoped hosts.
+    """
+    identity = "standalone"
+    try:
+        from agent.secret_scope import (
+            UnscopedSecretError,
+            current_secret_scope,
+            current_secret_scope_home,
+            is_multiplex_active,
+        )
+    except ImportError:
+        pass  # no Hermes host: one standalone profile per process
+    else:
+        if is_multiplex_active():
+            if current_secret_scope() is None:
+                raise UnscopedSecretError("TALK_API_SERVER_URL")
+            home = current_secret_scope_home()
+            if home:
+                identity = f"home:{home}"
+            else:
+                try:
+                    from gateway.session_context import get_session_env
+                    profile = get_session_env("HERMES_SESSION_PROFILE")
+                except ImportError:
+                    profile = None
+                if not profile:
+                    raise UnscopedSecretError(
+                        "TALK_API_SERVER_URL",
+                        "API-server probe has a bound scope without an identifiable profile",
+                    )
+                identity = f"profile:{profile}"
+    url = talk_config.api_server_url()
+    api_key = talk_config.api_server_key()
+    return identity, url, hashlib.sha256((api_key or "").encode("utf-8")).digest()
 
 
 INERT_DETAIL = "the Hermes api server lane is switched off in this process"
@@ -200,94 +246,117 @@ def probe() -> ApiServerStatus:
     return ApiServerStatus(available=True, reason=REASON_OK, detail="Hermes api server")
 
 
-def _refresh_in_background() -> None:
-    """Re-probe off the hot path so a warm caller never waits on the network."""
-
-    global _REFRESHING
+def _store(key: _StatusKey, verdict: ApiServerStatus, *, epoch: int | None = None) -> None:
+    """Store only a verdict for the same profile/config and cache generation."""
     with _STATUS_LOCK:
-        if _REFRESHING:
+        if epoch is not None and _CACHE_EPOCH != epoch:
             return
-        _REFRESHING = True
+        _STATUS[key] = (verdict, time.monotonic())
+        if len(_STATUS) > _MAX_CACHED_PROFILES:
+            oldest = min(_STATUS, key=lambda entry: _STATUS[entry][1])
+            del _STATUS[oldest]
+
+
+def _refresh_in_background(key: _StatusKey | None = None) -> None:
+    """Refresh one scoped verdict without blocking the voice/event loop."""
+    if key is None:
+        try:
+            key = _cache_key()
+        except Exception as exc:  # noqa: BLE001 — unavailable, never borrow another profile
+            _log.warning("api server probe unavailable (%s)", type(exc).__name__)
+            return
+    # Thread targets do not inherit ContextVars by default. Copy the *caller*
+    # context before spawn so Hermes get_secret keeps this profile's scope.
+    caller_context = contextvars.copy_context()
+    with _STATUS_LOCK:
+        if key in _REFRESHING:
+            return
+        _REFRESHING.add(key)
+        epoch = _CACHE_EPOCH
 
     def worker() -> None:
-        global _REFRESHING
         try:
-            verdict = probe()
-        except Exception as exc:  # noqa: BLE001 — a probe must never escape
+            verdict = caller_context.run(probe)
+        except Exception as exc:  # noqa: BLE001 — availability never raises
             _log.warning("api server probe failed: %s: %s", type(exc).__name__, exc)
             verdict = ApiServerStatus(
                 available=False,
                 reason=REASON_ERROR,
                 detail=f"I couldn't check the Hermes api server ({type(exc).__name__})",
             )
-        finally:
-            with _STATUS_LOCK:
-                _REFRESHING = False
-        # Stored even on failure: a cold cache that never fills would re-probe
-        # on every single turn, which is the stampede this cache exists to stop.
-        _store(verdict)
+        # Publish and release the in-flight guard atomically. A test reset
+        # must not let an old worker repopulate the new cache generation.
+        with _STATUS_LOCK:
+            if epoch != _CACHE_EPOCH:
+                return
+            _STATUS[key] = (verdict, time.monotonic())
+            _REFRESHING.discard(key)
+            if len(_STATUS) > _MAX_CACHED_PROFILES:
+                oldest = min(_STATUS, key=lambda entry: _STATUS[entry][1])
+                del _STATUS[oldest]
 
-    threading.Thread(target=worker, name="talk-apiserver-probe", daemon=True).start()
-
-
-def _store(verdict: ApiServerStatus) -> None:
-    global _STATUS, _STATUS_AT
-    with _STATUS_LOCK:
-        _STATUS = verdict
-        _STATUS_AT = time.monotonic()
+    try:
+        threading.Thread(target=worker, name="talk-apiserver-probe", daemon=True).start()
+    except RuntimeError as exc:
+        with _STATUS_LOCK:
+            _REFRESHING.discard(key)
+        _log.warning("api server probe could not start (%s)", type(exc).__name__)
 
 
 def warm() -> ApiServerStatus:
-    """Probe now, cache the verdict, and return it. **BLOCKS.**
+    """Probe now and cache the scoped verdict. **BLOCKS.**
 
-    The one function here that waits for the network on the caller's thread.
-    Call it where waiting is free — a session start, a dashboard status route
-    already on a worker thread — so that :func:`status` is warm before the
-    first spoken question arrives. Never call it from a tool handler.
+    Use only when waiting is safe (session start or an existing worker), never
+    inside a realtime tool handler.
     """
-
     if not _lane_enabled():
         return ApiServerStatus(available=False, reason=REASON_ABSENT, detail=INERT_DETAIL)
+    key = None
     try:
+        key = _cache_key()
         verdict = probe()
-    except Exception as exc:  # noqa: BLE001 — availability is never fatal
+    except Exception as exc:  # noqa: BLE001 — availability never raises
         _log.warning("api server probe failed: %s: %s", type(exc).__name__, exc)
         verdict = ApiServerStatus(
             available=False,
             reason=REASON_ERROR,
             detail=f"I couldn't check the Hermes api server ({type(exc).__name__})",
         )
-    _store(verdict)
+    if key is not None:
+        _store(key, verdict)
     return verdict
 
 
 def warm_in_background() -> None:
-    """Kick :func:`warm` off the caller's thread. Fire and forget."""
-
+    """Start a scoped, nonblocking availability probe."""
     _refresh_in_background()
 
 
 def status() -> ApiServerStatus:
-    """The current verdict. NEVER waits for the network.
+    """Read this profile's cached verdict; NEVER waits on network.
 
-    A cold cache schedules a probe and answers "still checking" — unavailable,
-    because a lane we cannot vouch for must not be claimed. A stale cache
-    answers with the last verdict and refreshes behind it. Either way the
-    caller returns in microseconds, which is the only thing that matters on a
-    thread that is also carrying audio.
+    No available scope means unavailable, not a fallback to another profile's
+    cache or process-wide environment.
     """
-
     if not _lane_enabled():
         return ApiServerStatus(available=False, reason=REASON_ABSENT, detail=INERT_DETAIL)
+    try:
+        key = _cache_key()
+    except Exception as exc:  # noqa: BLE001 — missing profile scope fails closed
+        return ApiServerStatus(
+            available=False,
+            reason=REASON_ERROR,
+            detail=f"I couldn't check the Hermes api server ({type(exc).__name__})",
+        )
     with _STATUS_LOCK:
-        cached, taken_at = _STATUS, _STATUS_AT
+        cached, taken_at = _STATUS.get(key, (None, 0.0))
     if cached is None:
-        _refresh_in_background()
+        _refresh_in_background(key)
         return ApiServerStatus(
             available=False, reason=REASON_ABSENT, detail=CHECKING_DETAIL
         )
     if time.monotonic() - taken_at >= talk_config.api_server_probe_ttl_s():
-        _refresh_in_background()
+        _refresh_in_background(key)
     return cached
 
 
@@ -664,11 +733,11 @@ def respond_to_approval(
 def reset_for_tests() -> None:
     """Clear the cached verdict between tests (never called in production)."""
 
-    global _STATUS, _STATUS_AT, _REFRESHING
+    global _CACHE_EPOCH
     with _STATUS_LOCK:
-        _STATUS = None
-        _STATUS_AT = 0.0
-        _REFRESHING = False
+        _CACHE_EPOCH += 1
+        _STATUS.clear()
+        _REFRESHING.clear()
 
 
 __all__ = [
