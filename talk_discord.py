@@ -2046,6 +2046,9 @@ def start_session(
             }
         )
 
+    if talk_config.discord_natural_leave():
+        loop.create_task(_watch_empty_room(generation, task, audio))
+
     # Deliberately not "I'm live": nothing has connected yet. The session
     # still has to mint, open a socket, and take the channel, and any of
     # those can refuse. Overclaiming here would be the one thing this
@@ -2061,6 +2064,79 @@ def start_session(
         "Starting limited legacy provider-owned voice. Use `/talk core join` for full "
         "canonical Hermes parity; say `talk status` to check or `talk leave` to stop."
     )
+
+
+async def _watch_empty_room(generation, running, audio) -> None:
+    """Leave the current Discord Talk channel if no humans remain for 8 seconds."""
+    import asyncio
+
+    empty_since = None
+    while not running.done():
+        await asyncio.sleep(1.0)
+        with _SESSION_LOCK:
+            owned = (
+                _SESSION.get("generation") == generation
+                and _SESSION.get("task") is running
+                and _SESSION.get("audio") is audio
+            )
+        if not owned:
+            return
+        bridge = getattr(audio, "_bridge", None)
+        if not isinstance(bridge, dict):
+            continue
+        adapter = bridge["adapter"]
+        guild_id = bridge["guild_id"]
+        voice_client = bridge["voice_client"]
+        if getattr(adapter, "_voice_clients", {}).get(guild_id) is not voice_client:
+            return
+        channel = getattr(voice_client, "channel", None)
+        members = getattr(channel, "members", None)
+        if members is None:
+            empty_since = None
+            continue
+        try:
+            members = tuple(members)
+            # Fail open on incomplete member data.
+            if any(type(getattr(m, "bot", None)) is not bool for m in members):
+                empty_since = None
+                continue
+            humans = any(not m.bot for m in members)
+        except (TypeError, AttributeError):
+            empty_since = None
+            continue
+        now = time.monotonic()
+        if humans:
+            empty_since = None
+        elif empty_since is None:
+            empty_since = now
+        elif now - empty_since >= 8.0:
+            fresh = getattr(getattr(voice_client, "channel", None), "members", None)
+            if fresh is None:
+                empty_since = None
+                continue
+            try:
+                if any(type(getattr(m, "bot", None)) is not bool or not m.bot for m in fresh):
+                    empty_since = None
+                    continue
+            except (TypeError, AttributeError):
+                empty_since = None
+                continue
+            with _SESSION_LOCK:
+                owned = (
+                    _SESSION.get("generation") == generation
+                    and _SESSION.get("task") is running
+                    and _SESSION.get("audio") is audio
+                )
+            if not owned or running.done():
+                return
+            if getattr(adapter, "_voice_clients", {}).get(guild_id) is not voice_client:
+                return
+            running.cancel()
+            try:
+                await adapter.leave_voice_channel(guild_id)
+            except Exception as exc:  # noqa: BLE001 — Talk still terminates
+                _log.warning("empty-room leave failed (%s)", _safe_exception_name(exc))
+            return
 
 
 def request_voice_departure() -> str:
