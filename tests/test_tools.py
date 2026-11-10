@@ -113,6 +113,16 @@ def test_voice_tool_profiles_are_explicit_and_keep_safe_pause(monkeypatch, profi
     ]
 
 
+@pytest.mark.parametrize("profile", ["full", "assistant", "minimal"])
+def test_discord_leave_tool_is_conditional_and_included_in_voice_profiles(monkeypatch, profile):
+    monkeypatch.setattr(talk_config, "tool_profile", lambda: profile)
+    absent = [t["name"] for t in talk_tools.default_talk_tools(natural_leave=False)]
+    present = [t["name"] for t in talk_tools.default_talk_tools(natural_leave=True)]
+    assert "leave_voice_channel" not in absent
+    assert present.count("leave_voice_channel") == 1
+    assert len(present) == len(absent) + 1
+
+
 def test_voice_tool_profile_preserves_optional_vault_availability(monkeypatch):
     monkeypatch.setattr(talk_config, "tool_profile", lambda: "assistant")
     monkeypatch.setattr(talk_vault, "available", lambda: True)
@@ -186,6 +196,7 @@ def test_no_handler_is_orphaned():
     advertised = {tool["name"] for tool in talk_tools.default_talk_tools()}
     advertised.add("search_vault")  # conditional, absent when unservable
     advertised.add("pause_voice_input")  # conditional, absent without a way to resume
+    advertised.add("leave_voice_channel")  # conditional, Discord-only
 
     assert set(talk_tools._HANDLERS) == advertised
 
