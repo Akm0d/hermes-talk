@@ -89,6 +89,36 @@ reduction); the server runs its own STT.
 and voice. It never requires OpenAI credentials when `local` is selected.
 `hermes talk check` opens a real session and proves one spoken turn.
 
+## Native speech-to-speech context budgets
+
+Some local realtime engines have small prompt/KV budgets (e.g. Nemotron
+VoiceChat through NeMo-Speech.cpp). The default **full** tool list and
+instructions are unchanged for compatibility. To opt in to smaller voice
+prompts, set these in the **voice profile's** scoped environment:
+
+```dotenv
+TALK_TOOL_PROFILE=assistant
+TALK_PROMPT_PROFILE=compact
+```
+
+- `TALK_TOOL_PROFILE=full` (default): all legacy Talk functions.
+- `assistant`: memory search, task delegation, work checks, approval
+  resolution, capabilities, and pause (when the transport supports resume).
+- `minimal`: memory search, capabilities, and conditional pause. It cannot
+  delegate work or resolve approvals.
+- `TALK_PROMPT_PROFILE=full` (default): existing detailed behavioral prompt.
+- `compact`: short safety/delegation contract and strict caps on the identity
+  sections (PERSONA 600, USER 350, MEMORY 300, WORKING 250 characters).
+  Omitted content is not available directly to the voice model. Delegated
+  Hermes agents retain their own profile-specific identity and tools.
+
+These switches are resolved through the active Hermes profile's secret scope;
+never copy a different profile's `.env` or memory into the voice profile.
+An unknown profile value refuses the session rather than silently choosing a
+different toolset. Both switches affect only newly started calls. They do
+**not** enlarge NeMo's context or guarantee a specific model will accept the
+session. Verify with the model's `session.updated` event and a real spoken turn.
+
 ## Windows
 
 speech-to-speech is not in its own Windows CI, but runs natively (no WSL)
