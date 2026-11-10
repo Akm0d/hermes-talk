@@ -1652,14 +1652,6 @@ async def run_talk_session(
         capabilities=talk_capabilities.instruction_section(catalog_snapshot),
         prompt_profile=prompt_profile,
     )
-    if natural_leave and host_execution_attachment is None:
-        instructions += (
-            "\n\nWhen someone clearly says goodbye TO YOU and intends to "
-            "end the conversation, call end_voice_call. Do not require a "
-            "specific name or phrase; never end the call for a farewell to "
-            "another person or for quoted or ambiguous speech."
-        )
-
     # Find out NOW whether the api_server lane is up. The verdict is needed by
     # the first tool call; warming it before then avoids spending that tool's
     # bounded courtesy wait on a cold network probe. Fire-and-forget on a daemon
