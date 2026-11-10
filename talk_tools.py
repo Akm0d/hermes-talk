@@ -415,7 +415,7 @@ _TOOL_PAUSE_VOICE_INPUT: dict = {
 }
 
 
-_TOOL_END_VOICE_CALL: dict = {
+_TOOL_LEAVE_VOICE_CHANNEL: dict = {
     "type": "function",
     "name": "leave_voice_channel",
     "description": (
@@ -500,7 +500,7 @@ def default_talk_tools(
     if pausable:
         tools.append(_TOOL_PAUSE_VOICE_INPUT)
     if natural_leave:
-        tools.append(_TOOL_END_VOICE_CALL)
+        tools.append(_TOOL_LEAVE_VOICE_CHANNEL)
     try:
         if talk_vault.available():
             tools.insert(1, _TOOL_SEARCH_VAULT)
