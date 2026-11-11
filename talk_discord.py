@@ -521,7 +521,7 @@ class DiscordAudio:
         #: SSRCs already warned about (E2EE audio withheld, speaker unknown).
         self._unidentified_ssrcs: set[Any] = set()
         #: Wall-clock instant up to which we have handed the session audio.
-        #: Zero until the first inbound audio packet, gating startup silence.
+        #: Zero until start(), which is what gates silence synthesis.
         self._audio_clock = 0.0
         self._original_on_packet = None
         self._tapped = None
@@ -686,11 +686,7 @@ class DiscordAudio:
         self._disconnected_since = None
         if not self._capture_only:
             self._source = _new_source(self._outbound)
-        # Do not send synthetic silence before anyone has spoken. A native
-        # duplex speech model can otherwise start generating from its prompt
-        # merely because a Discord voice connection was opened.
-        # The first real packet starts the clock in read_input_packet().
-        self._audio_clock = 0.0
+        self._audio_clock = time.monotonic()
         self._loop = _running_loop()
         if self._loop is None:
             # Without a loop we cannot marshal the host's inactivity-timer
@@ -1306,8 +1302,8 @@ class DiscordAudio:
     def read_input_packet(self) -> InputAudioPacket | None:
         """One atomic metadata+PCM packet for the session, paced to real time.
 
-        Once the first voice packet arrives, a microphone streams continuously
-        — silence included — and the session's turn detection depends on that: the server decides the
+        A microphone streams continuously — silence included — and the
+        session's turn detection depends on that: the server decides the
         operator stopped talking by measuring silence IN THE AUDIO IT
         RECEIVES, not by watching a clock. Discord does the opposite. It
         stops transmitting when nobody speaks, so a bridge that only
