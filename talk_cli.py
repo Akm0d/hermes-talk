@@ -1619,13 +1619,35 @@ async def run_talk_session(
         resume_control = None
 
     try:
-        tools = (
-            host_execution_attachment.tool_definitions()
-            if host_execution_attachment is not None
-            else talk_tools.default_talk_tools(
+        if host_execution_attachment is not None:
+            # The canonical attachment owns execution policy. Narrow only the
+            # schemas *advertised* to the small-context voice model; dispatch
+            # still goes through the same host-authorized attachment.
+            tools = host_execution_attachment.tool_definitions()
+            attached_count = len(tools)
+            voice_tool_profile = talk_config.tool_profile()
+            if voice_tool_profile != "full":
+                allowed = (
+                    talk_tools._ASSISTANT_TOOL_NAMES
+                    if voice_tool_profile == "assistant"
+                    else talk_tools._MINIMAL_TOOL_NAMES
+                )
+                tools = [tool for tool in tools if tool["name"] in allowed]
+                _log.info(
+                    "voice host-tool profile=%s: advertising %d/%d canonical tools (%s)",
+                    voice_tool_profile, len(tools), attached_count,
+                    ", ".join(tool["name"] for tool in tools) or "none",
+                )
+                if not tools:
+                    _log.warning(
+                        "voice host-tool profile=%s matched no canonical tools; "
+                        "voice remains available without direct tool calls",
+                        voice_tool_profile,
+                    )
+        else:
+            tools = talk_tools.default_talk_tools(
                 pausable=resume_control is not None, natural_leave=natural_leave
             )
-        )
     except Exception as exc:  # noqa: BLE001 - host attachment startup boundary
         print(f"talk: host tool setup failed: {type(exc).__name__}", file=sys.stderr)
         # The legacy lane reaches this handler with NO attachment (its tools
