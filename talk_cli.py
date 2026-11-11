@@ -1674,6 +1674,13 @@ async def run_talk_session(
         capabilities=talk_capabilities.instruction_section(catalog_snapshot),
         prompt_profile=prompt_profile,
     )
+    # Diagnostic counts only: never log private prompt text or tool schemas.
+    _log.info(
+        "voice session budget: lane=%s host_attached=%s prompt=%s tools=%d "
+        "instructions_chars=%d",
+        lane, host_execution_attachment is not None, prompt_profile,
+        len(tools), len(instructions),
+    )
     # Find out NOW whether the api_server lane is up. The verdict is needed by
     # the first tool call; warming it before then avoids spending that tool's
     # bounded courtesy wait on a cold network probe. Fire-and-forget on a daemon
